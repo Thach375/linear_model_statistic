@@ -1,0 +1,45 @@
+# Model files
+*.pkl
+models/*.pkl
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# Large data files
+data/*.csv
+*.zip
+data/
+
+# Generated predictions
+submission_*.csv
+prediction_distribution_*.png
+
+# Logs
+*.log
+logs/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
