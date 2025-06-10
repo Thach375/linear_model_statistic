@@ -1,10 +1,7 @@
 # Model files
-*.pkl
-models/*.pkl
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
 
 # Python cache files
 __pycache__/
@@ -22,12 +19,9 @@ env/
 .env/
 
 # Large data files
-data/*.csv
 *.zip
-data/
 
 # Generated predictions
-submission_*.csv
 prediction_distribution_*.png
 
 # Logs
