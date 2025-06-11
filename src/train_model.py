@@ -1,8 +1,7 @@
 import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.model_selection import KFold, train_test_split, RandomizedSearchCV
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet
-from sklearn.preprocessing import PolynomialFeatures, OneHotEncoder, StandardScaler
+from sklearn.preprocessing import PolynomialFeatures, OneHotEncoder, StandardScaler, OrdinalEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -13,36 +12,79 @@ import json
 import time
 import os
 
+# Load feature importance data
+print("Loading important features from feature_importance.csv...")
+try:
+    feature_importance = pd.read_csv('models/feature_importance.csv')
+    # Get top features (you can adjust the number)
+    important_features = feature_importance['Feature'].tolist()
+    print(f"Using features: {important_features}")
+except FileNotFoundError:
+    print("Warning: feature_importance.csv not found. Using all features.")
+    important_features = None
+
 # Load the dataset
 data = pd.read_csv('data/train.csv')
 
 # Split features and target
-X = data.drop(columns=['SalePrice', 'Id'])
+X_full = data.drop(columns=['SalePrice', 'Id'])
 y = data['SalePrice']
+
+# Filter for important features if available
+if important_features:
+    # Some features in the importance file might be one-hot encoded names
+    # We need to extract original column names before one-hot encoding
+    original_feature_names = []
+    for feature in important_features:
+        # Check if feature exists directly in the dataset
+        if feature in X_full.columns:
+            original_feature_names.append(feature)
+        else:
+            # This might be a one-hot encoded feature, extract the column name
+            for col in X_full.columns:
+                if col in feature:
+                    if col not in original_feature_names:
+                        original_feature_names.append(col)
+                        
+    X = X_full[original_feature_names]
+else:
+    X = X_full
 
 # Identify categorical and numerical columns
 categorical_cols = X.select_dtypes(include=['object']).columns
 numerical_cols = X.select_dtypes(exclude=['object']).columns
 
-# Split data into train, validation, and test sets
-X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42)
-X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42)
+# Define K-fold cross validation strategy
+k_folds = 5  # Number of folds
+cv = KFold(n_splits=k_folds, shuffle=True, random_state=42)
 
-# After identifying categorical and numerical columns, create preprocessor
+# Phân loại biến categorical thành có thứ tự và không có thứ tự
+ordinal_features = ['OverallQual', 'BsmtQual', 'KitchenQual']
+
+nominal_features = [col for col in categorical_cols if col not in ordinal_features]
+
+# Tạo transformers riêng cho từng loại dữ liệu
 numeric_transformer = Pipeline(steps=[
     ('imputer', SimpleImputer(strategy='median')),
     ('scaler', StandardScaler())
 ])
 
-categorical_transformer = Pipeline(steps=[
+ordinal_transformer = Pipeline(steps=[
     ('imputer', SimpleImputer(strategy='most_frequent')),
-    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ('ordinal', OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1))
 ])
 
+nominal_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore', drop='first'))  # drop='first' để giảm đa cộng tuyến
+])
+
+# Kết hợp các transformers
 preprocessor = ColumnTransformer(
     transformers=[
         ('num', numeric_transformer, numerical_cols),
-        ('cat', categorical_transformer, categorical_cols)
+        ('ord', ordinal_transformer, ordinal_features),
+        ('nom', nominal_transformer, nominal_features)
     ])
 
 # Define models and hyperparameter distributions
@@ -121,10 +163,9 @@ for name, (est, dist, prep, fit_kw) in models.items():
         pipe, dist, n_iter=n_iter,
         scoring='neg_root_mean_squared_error', n_jobs=4, random_state=42, verbose=1, refit=True
     )
-
     tic = time.time()
     try:
-        search.fit(X_train, y_train, **fit_kw)
+        search.fit(X, y, **fit_kw)
     except Exception as e:
         print(f"↳ Error in {name}: {str(e)}")
         continue
@@ -142,25 +183,18 @@ for name, (est, dist, prep, fit_kw) in models.items():
     top5['mean_test_score'] = -top5['mean_test_score']  # Convert to positive RMSE
     print(top5.to_string(index=False))
 
-    # Evaluate on validation set
-    y_pred = search.predict(X_val)
-    rmse = np.sqrt(mean_squared_error(y_val, y_pred))
-    r2 = r2_score(y_val, y_pred)
-    print(f"Validation RMSE: {rmse:.4f}, R²: {r2:.4f}")
-
-    # Update best model
-    if rmse < best_score:
-        best_score, best_pipe, best_name = rmse, search.best_estimator_, name
+    # K-fold validation is already handled in RandomizedSearchCV
+    # We'll use the best CV score as our validation metric
+    cv_rmse = -search.best_score_  # Convert back to positive RMSE
+    print(f"Cross-Validation RMSE: {cv_rmse:.4f}")    # Update best model
+    if cv_rmse < best_score:
+        best_score, best_pipe, best_name = cv_rmse, search.best_estimator_, name
 
     # Save checkpoint
     joblib.dump(search.best_estimator_, f"models/{name}_best.pkl")
 
-# Evaluate on test set
+# Final report
 if best_pipe is None:
     raise RuntimeError("No model trained successfully!")
 
 print(f"\nBest model = {best_name}  (val RMSE={best_score:.4f})")
-y_test_pred = best_pipe.predict(X_test)
-test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
-test_r2 = r2_score(y_test, y_test_pred)
-print(f"Test RMSE: {test_rmse:.4f}, Test R²: {test_r2:.4f}")
